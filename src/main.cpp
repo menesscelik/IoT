@@ -6,11 +6,11 @@
 #include "SPIFFS.h"
 
 // Wi-Fi Bilgileri (kendine göre değiştir)
-const char* ssid = "Menes";
-const char* password = "deneme123";
+const char* ssid = "sinem";
+const char* password = "sinem1234";
 
 // Flask sunucusunun IP adresi
-const char* serverURL = "http://172.20.10.3:5000/upload_audio";
+const char* serverURL = "http://192.168.137.126:5000/upload_audio";
 
 // I2S mikrofon pinleri (INMP441 için)
 #define I2S_WS  13
@@ -21,9 +21,9 @@ const char* serverURL = "http://172.20.10.3:5000/upload_audio";
 #define I2S_DAC_PORT I2S_NUM_1
 
 // I2S DAC pinleri
-#define I2S_DAC_BCK  20   // BCK (Bit Clock)
-#define I2S_DAC_WS   21   // LCK (Word Select / LRCK)
-#define I2S_DAC_DOUT 19   // DIN (Data In)
+#define I2S_DAC_BCK  38   // BCK (Bit Clock)
+#define I2S_DAC_WS   39   // LCK (Word Select / LRCK)
+#define I2S_DAC_DOUT 37   // DIN (Data In)
 
 // Ses örnekleme ayarları
 #define SAMPLE_RATE     16000
@@ -131,6 +131,7 @@ void loop() {
 
       HTTPClient http;
       http.begin(serverURL);
+      http.setTimeout(20000);  // 🔧 20 saniye timeout eklendi
       http.addHeader("Content-Type", "application/octet-stream");
 
       Serial.println("📤 Sunucuya gönderiliyor...");
@@ -149,8 +150,10 @@ void loop() {
           }
           audioFile.close();
           Serial.println("📁 Yanıt SPIFFS'e kaydedildi: /response.pcm");
+
           i2s_driver_uninstall(I2S_MIC_PORT);
-          setupI2SDAC();
+          i2s_driver_uninstall(I2S_DAC_PORT); // 🔧 DAC driver kaldırılıyor
+          setupI2SDAC();                      // 🔄 Yeniden başlatılıyor
           playPCMFromSPIFFS("/response.pcm");
         } else {
           Serial.println("❌ Yanıt dosyası oluşturulamadı.");
@@ -172,20 +175,12 @@ void playPCMFromSPIFFS(const char* path) {
     return;
   }
   Serial.println("🔊 Ses çalınıyor...");
-  int16_t buffer[256]; // 512 byte = 256 sample
+  uint8_t buffer[512];
   size_t bytesRead;
-  const float gain = 3.0; // Ses seviyesini 3 kat artır
-
-  while ((bytesRead = file.read((uint8_t*)buffer, sizeof(buffer))) > 0) {
-    size_t samples = bytesRead / 2;
-    for (size_t i = 0; i < samples; i++) {
-      int32_t sample = buffer[i] * gain;
-      if (sample > 32767) sample = 32767;
-      if (sample < -32768) sample = -32768;
-      buffer[i] = sample;
-    }
+  while ((bytesRead = file.read(buffer, sizeof(buffer))) > 0) {
     size_t bytes_written = 0;
-    i2s_write(I2S_DAC_PORT, buffer, samples * 2, &bytes_written, portMAX_DELAY);
+    i2s_write(I2S_DAC_PORT, buffer, bytesRead, &bytes_written, portMAX_DELAY);
+    Serial.printf("bytes_written: %d\n", bytes_written);
   }
   file.close();
   Serial.println("✅ Ses çalma tamamlandı.");
