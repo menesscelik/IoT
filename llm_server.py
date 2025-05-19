@@ -116,12 +116,13 @@ def upload():
         if request.is_json:
             data = request.get_json()
             text = data.get("text", "").strip()
+            lang = data.get("lang", "tr")  # Varsayılan olarak Türkçe
             if text:
                 file_id = str(uuid.uuid4())
                 mp3_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.mp3")
                 wav_reply_path = os.path.join(UPLOAD_FOLDER, f"{file_id}_reply.wav")
                 try:
-                    gTTS(text, lang="en").save(mp3_path)
+                    gTTS(text, lang=lang).save(mp3_path)
                     audio = AudioSegment.from_mp3(mp3_path)
                     audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
                     raw_pcm = audio.raw_data
@@ -416,7 +417,7 @@ def verify_user():
         match = df[(df["Name"] == name) & (df["Password"] == password)]
         if not match.empty:
             # Log kaydı
-            log_file = "log_access.csv"
+            log_file = "access_logs.csv"
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_df = pd.DataFrame([{ "Name": name, "Timestamp": now }])
             if not os.path.exists(log_file):
@@ -431,7 +432,7 @@ def verify_user():
 
 @app.route("/last_login", methods=["GET"])
 def last_login():
-    log_file = "log_access.csv"
+    log_file = "access_logs.csv"
     if not os.path.exists(log_file):
         return jsonify({"message": "Kayıt yok"}), 200
     try:

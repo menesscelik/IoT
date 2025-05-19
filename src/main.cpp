@@ -12,7 +12,7 @@
 
 #define WIFI_SSID    "Menes"
 #define WIFI_PASS    "deneme123"
-#define SERVER_IP    "172.20.10.3"
+#define SERVER_IP    "192.168.1.141"
 #define SERVER_PORT  "5000"
 #define SERVER_URL   "http://" SERVER_IP ":" SERVER_PORT
 #define UPLOAD_URL   SERVER_URL "/upload"
@@ -265,37 +265,44 @@ void loop() {
           String name = getNameByVoice();
           Serial.print("Algılanan isim: "); Serial.println(name);
           Serial.println("Şimdi 4 haneli şifrenizi girin (bitirmek için #):");
-          String password = "";
-          while (true) {
-            char key = keypad.getKey();
-            if (key) {
-              if (key == '#') break;
-              if (key >= '0' && key <= '9' && password.length() < 4) {
-                password += key;
-                Serial.print("*");
+          int passwordAttempts = 0;  // Şifre deneme sayacı
+          
+          while (passwordAttempts < 3) {  // 3 deneme hakkı kontrolü
+            String password = "";
+            while (true) {
+              char key = keypad.getKey();
+              if (key) {
+                if (key == '#') break;
+                if (key >= '0' && key <= '9' && password.length() < 4) {
+                  password += key;
+                  Serial.print("*");
+                }
               }
+              delay(50);
             }
-            delay(50);
+            Serial.println();
+            
+            if (password.length() != 4) {
+              Serial.println("Hatalı giriş! 4 haneli şifre zorunlu.");
+              continue;
+            }
+            
+            // Sunucuya gönder
+            WiFiClient client;
+            HTTPClient http;
+            http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/register_user");
+            http.addHeader("Content-Type", "application/json");
+            String json = String("{\"name\":\"") + name + "\",\"password\":\"" + password + "\"}";
+            int httpCode = http.POST(json);
+            if (httpCode == HTTP_CODE_OK) {
+              String response = http.getString();
+              Serial.println("\nKayıt başarılı: " + response);
+            } else {
+              Serial.println("\nKayıt başarısız! HTTP kodu: " + String(httpCode));
+            }
+            http.end();
+            break; // Kayıt sonrası ana menüye dön
           }
-          Serial.println();
-          if (name.length() == 0 || password.length() != 4) {
-            Serial.println("Hatalı giriş! İsim ve 4 haneli şifre zorunlu.");
-            break; // Hatalı girişte de ana menüye dön
-          }
-          // Sunucuya gönder
-          WiFiClient client;
-          HTTPClient http;
-          http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/register_user");
-          http.addHeader("Content-Type", "application/json");
-          String json = String("{\"name\":\"") + name + "\",\"password\":\"" + password + "\"}";
-          int httpCode = http.POST(json);
-          if (httpCode == HTTP_CODE_OK) {
-            String response = http.getString();
-            Serial.println("\nKayıt başarılı: " + response);
-          } else {
-            Serial.println("\nKayıt başarısız! HTTP kodu: " + String(httpCode));
-          }
-          http.end();
           break; // Kayıt sonrası ana menüye dön
         } else if (command.indexOf("ana menü") != -1) {
           break; // Ana menüye dön
@@ -318,47 +325,55 @@ void loop() {
             String checkResp = http.getString();
             if (checkResp == "OK") {
               Serial.println("4 haneli şifrenizi girin (bitirmek için #):");
-              String password = "";
-              while (true) {
-                char key = keypad.getKey();
-                if (key) {
-                  if (key == '#') break;
-                  if (key >= '0' && key <= '9' && password.length() < 4) {
-                    password += key;
-                    Serial.print("*");
+              int passwordAttempts = 0;  // Şifre deneme sayacı
+              
+              while (passwordAttempts < 3) {  // 3 deneme hakkı kontrolü
+                String password = "";
+                while (true) {
+                  char key = keypad.getKey();
+                  if (key) {
+                    if (key == '#') break;
+                    if (key >= '0' && key <= '9' && password.length() < 4) {
+                      password += key;
+                      Serial.print("*");
+                    }
                   }
+                  delay(50);
                 }
-                delay(50);
-              }
-              Serial.println();
-              if (password.length() != 4) {
-                Serial.println("Hatalı giriş! 4 haneli şifre zorunlu.");
-                break;
-              }
-              // Şifreyi ve ismi sunucuya gönder
-              WiFiClient loginClient;
-              HTTPClient loginHttp;
-              loginHttp.begin(loginClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/verify_user");
-              loginHttp.addHeader("Content-Type", "application/json");
-              String loginJson = String("{\"name\":\"") + name + "\",\"password\":\"" + password + "\"}";
-              int loginCode = loginHttp.POST(loginJson);
-              if (loginCode == HTTP_CODE_OK) {
+                Serial.println();
+                
+                if (password.length() != 4) {
+                  Serial.println("Hatalı giriş! 4 haneli şifre zorunlu.");
+                  continue;
+                }
+                
+                // Şifreyi ve ismi sunucuya gönder
+                WiFiClient loginClient;
+                HTTPClient loginHttp;
+                loginHttp.begin(loginClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/verify_user");
+                loginHttp.addHeader("Content-Type", "application/json");
+                String loginJson = String("{\"name\":\"") + name + "\",\"password\":\"" + password + "\"}";
+                int loginCode = loginHttp.POST(loginJson);
+                
+                // HTTP yanıtını al
                 String response = loginHttp.getString();
                 DynamicJsonDocument doc(256);
                 DeserializationError error = deserializeJson(doc, response);
-                if (!error && doc["status"] == "success") {
+                
+                // Başarılı giriş veya şifre hatası durumlarını kontrol et
+                if (loginCode == HTTP_CODE_OK && !error && doc["status"] == "success") {
                   Serial.println("\nGiriş başarılı! Kapı açılıyor...");
                   doorServo.write(180); // 180 derece döndür
                   delay(2000);
                   doorServo.write(SERVO_CLOSED);
                   Serial.println("Kapı kapandı.");
                   // Welcome mesajı
-                  String welcomeText = "Welcome " + name;
+                  String welcomeText = "Hoş geldiniz " + name;
                   WiFiClient ttsClient;
                   HTTPClient ttsHttp;
                   ttsHttp.begin(ttsClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/upload");
                   ttsHttp.addHeader("Content-Type", "application/json");
-                  String ttsJson = String("{\"text\":\"") + welcomeText + "\"}";
+                  String ttsJson = String("{\"text\":\"") + welcomeText + "\",\"lang\":\"tr\"}";
                   int ttsCode = ttsHttp.POST(ttsJson);
                   if (ttsCode == HTTP_CODE_OK) {
                     String ttsUrl = ttsHttp.getString();
@@ -367,13 +382,50 @@ void loop() {
                     }
                   }
                   ttsHttp.end();
+                  loginHttp.end();
+                  break; // Başarılı girişte döngüden çık
                 } else {
-                  Serial.println("\nGiriş başarısız! Şifre yanlış.");
+                  // Şifre yanlış veya HTTP hatası durumu
+                  passwordAttempts++;
+                  
+                  // Yanlış şifre sesli uyarısı
+                  WiFiClient wrongPassClient;
+                  HTTPClient wrongPassHttp;
+                  wrongPassHttp.begin(wrongPassClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/upload");
+                  wrongPassHttp.addHeader("Content-Type", "application/json");
+                  
+                  String wrongPassText;
+                  if (passwordAttempts >= 3) {
+                    wrongPassText = "Hakkınız kalmadı. Ana menüye dönülüyor.";
+                    String wrongPassJson = String("{\"text\":\"") + wrongPassText + "\",\"lang\":\"tr\"}";
+                    int wrongPassCode = wrongPassHttp.POST(wrongPassJson);
+                    if (wrongPassCode == HTTP_CODE_OK) {
+                      String wrongPassUrl = wrongPassHttp.getString();
+                      if (wrongPassUrl.startsWith("http")) {
+                        play_wav_from_url(wrongPassUrl);
+                      }
+                    }
+                    wrongPassHttp.end();
+                    Serial.println("\nGiriş hakkınız kalmadı! Ana menüye dönülüyor.");
+                    loginHttp.end();
+                    return; // Ana menüye dön
+                  } else {
+                    wrongPassText = "Şifre yanlış. Kalan hakkınız: " + String(3 - passwordAttempts);
+                    String wrongPassJson = String("{\"text\":\"") + wrongPassText + "\",\"lang\":\"tr\"}";
+                    int wrongPassCode = wrongPassHttp.POST(wrongPassJson);
+                    if (wrongPassCode == HTTP_CODE_OK) {
+                      String wrongPassUrl = wrongPassHttp.getString();
+                      if (wrongPassUrl.startsWith("http")) {
+                        play_wav_from_url(wrongPassUrl);
+                      }
+                    }
+                    wrongPassHttp.end();
+                    Serial.println("\nGiriş başarısız! Şifre yanlış. Kalan hak: " + String(3 - passwordAttempts));
+                    Serial.println("4 haneli şifrenizi tekrar girin (bitirmek için #):");
+                  }
                 }
-              } else {
-                Serial.println("\nGiriş başarısız! HTTP kodu: " + String(loginCode));
+                loginHttp.end();
               }
-              loginHttp.end();
             } else {
               Serial.println("Böyle bir kullanıcı bulunamadı. Ana menüye dönülüyor.");
             }
