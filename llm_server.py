@@ -17,7 +17,7 @@ SERVER_IP = "192.168.137.44"
 SERVER_PORT = 5000
 
 # API Configuration
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 WHISPER_MODEL = "whisper-large-v3"
 CHAT_MODEL = "llama3-8b-8192"
 
