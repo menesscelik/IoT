@@ -10,7 +10,6 @@ import io
 app = Flask(__name__)
 UPLOAD_FOLDER = "audios"
 LOG_FILE = "access_logs.csv"
-NAMES_FILE = "fingerprint_names.csv"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Server Configuration
@@ -35,76 +34,21 @@ def get_log_context():
         print(f"Log dosyası okuma hatası: {str(e)}")
         return "Kayıt dosyası okunamadı."
 
-def get_fingerprint_name(finger_id):
-    try:
-        print(f"İsim aranıyor, ID: {finger_id}")
-        if os.path.exists(NAMES_FILE):
-            df = pd.read_csv(NAMES_FILE)
-            print(f"Mevcut kayıtlar:\n{df}")
-            name_row = df[df['ID'] == int(finger_id)]
-            if not name_row.empty:
-                name = name_row.iloc[0]['Name']
-                print(f"İsim bulundu: {name}")
-                return name
-            else:
-                print(f"ID {finger_id} için kayıt bulunamadı")
-        else:
-            print(f"İsim dosyası bulunamadı: {NAMES_FILE}")
-    except Exception as e:
-        print(f"İsim okuma hatası: {str(e)}")
-    return "Unknown"
-
-def save_fingerprint_name(finger_id, name):
-    try:
-        if not os.path.exists(NAMES_FILE):
-            df = pd.DataFrame(columns=['ID', 'Name'])
-            df.to_csv(NAMES_FILE, index=False)
-        
-        df = pd.read_csv(NAMES_FILE)
-        
-        # ID varsa güncelle, yoksa yeni ekle
-        if df[df['ID'] == finger_id].empty:
-            df = pd.concat([df, pd.DataFrame([{'ID': finger_id, 'Name': name}])], ignore_index=True)
-        else:
-            df.loc[df['ID'] == finger_id, 'Name'] = name
-            
-        df.to_csv(NAMES_FILE, index=False)
-        return True
-    except Exception as e:
-        print(f"İsim kaydetme hatası: {str(e)}")
-        return False
-
 def get_user_info_by_id(user_id):
     try:
-        # Önce names dosyasından kontrol et
-        if os.path.exists(NAMES_FILE):
-            names_df = pd.read_csv(NAMES_FILE)
-            name_row = names_df[names_df['ID'] == int(user_id)]
-            if not name_row.empty:
-                name = name_row.iloc[0]['Name']
-                
-                # Log dosyasından son aktiviteyi bul
-                if os.path.exists(LOG_FILE):
-                    logs_df = pd.read_csv(LOG_FILE)
-                    user_logs = logs_df[logs_df['ID'] == int(user_id)].sort_values('Timestamp', ascending=False)
-                    
-                    if not user_logs.empty:
-                        last_action = user_logs.iloc[0]['Action']
-                        last_time = user_logs.iloc[0]['Timestamp']
-                        return f"{name} (ID: {user_id}). Son işlemi: {last_time} tarihinde {last_action}"
-                
-                return f"{name} (ID: {user_id})"
-                
-        # Sadece log dosyasından kontrol et
+        # Log dosyasından son aktiviteyi bul
         if os.path.exists(LOG_FILE):
             logs_df = pd.read_csv(LOG_FILE)
-            user_logs = logs_df[logs_df['ID'] == int(user_id)]
+            user_logs = logs_df[logs_df['ID'] == int(user_id)].sort_values('Timestamp', ascending=False)
+            
             if not user_logs.empty:
                 name = user_logs.iloc[0]['Name']
-                return f"{name} (ID: {user_id})"
-                
-        return f"ID {user_id} için kayıt bulunamadı."
-        
+                last_action = user_logs.iloc[0]['Action']
+                last_time = user_logs.iloc[0]['Timestamp']
+                return f"{name} (ID: {user_id}). Son işlemi: {last_time} tarihinde {last_action}"
+            
+            return f"ID {user_id} için kayıt bulunamadı."
+            
     except Exception as e:
         print(f"Kullanıcı bilgisi alma hatası: {str(e)}")
         return f"ID {user_id} için bilgi alınırken hata oluştu."
@@ -397,66 +341,48 @@ def upload():
 def serve_audio(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
-@app.route("/log_access", methods=["POST"])
-def log_access():
-    try:
-        data = request.get_json()
-        print(f"Gelen veri: {data}")
 
-        # Keypad ile girişte ID ve isim sabit olabilir
-        action = data.get('action', 'Access')
-        timestamp = data.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        name = data.get('name', 'KeypadUser')
-        # ID zorunluysa sabit bir değer verelim (ör: 1)
-        finger_id = data.get('id', 1)
-
-        # Log kaydını ekle
-        new_log = pd.DataFrame([{
-            'ID': finger_id,
-            'Name': name,
-            'Timestamp': timestamp,
-            'Action': action
-        }])
-        new_log.to_csv(LOG_FILE, mode='a', header=False, index=False)
-
-        response_data = {
-            "status": "success",
-            "message": "Log kaydedildi",
-            "name": name
-        }
-        print(f"Gönderilen yanıt: {response_data}")
-        return jsonify(response_data), 200
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Hata oluştu: {error_msg}")
-        return jsonify({
-            "status": "error",
-            "message": error_msg
-        }), 500
 
 @app.route("/register_user", methods=["POST"])
 def register_user():
     try:
         data = request.get_json()
+        print(f"[DEBUG] Gelen kayıt isteği: {data}")  # 🔍 debug log
+
         name = data.get("name", "").strip()
         password = data.get("password", "").strip()
+
         if not name or not password:
             return jsonify({"status": "error", "message": "İsim ve şifre zorunlu."}), 400
+
         users_file = "users.csv"
-        # Dosya yoksa oluştur
+
+        # CSV dosyası yoksa oluştur
         if not os.path.exists(users_file):
             df = pd.DataFrame(columns=["Name", "Password"])
             df.to_csv(users_file, index=False)
+
+        # CSV'yi yükle
         df = pd.read_csv(users_file)
-        # Aynı isim var mı kontrol et
+
+        # Kullanıcı zaten varsa → güncelle
         if not df[df["Name"] == name].empty:
-            return jsonify({"status": "error", "message": "Bu isim zaten kayıtlı."}), 400
-        # Kaydı ekle
-        df = pd.concat([df, pd.DataFrame([{"Name": name, "Password": password}])], ignore_index=True)
+            print(f"[INFO] {name} adlı kullanıcı zaten kayıtlı, şifresi güncelleniyor.")
+            df.loc[df["Name"] == name, "Password"] = password
+            message = "Mevcut kullanıcı güncellendi."
+        else:
+            # Yeni kullanıcı olarak ekle
+            df = pd.concat([df, pd.DataFrame([{"Name": name, "Password": password}])], ignore_index=True)
+            message = "Yeni kullanıcı kaydedildi."
+
+        # Güncellenmiş CSV'yi kaydet
         df.to_csv(users_file, index=False)
-        return jsonify({"status": "success", "message": "Kayıt başarılı.", "name": name}), 200
+
+        return jsonify({"status": "success", "message": message, "name": name}), 200
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route("/check_user", methods=["POST"])
 def check_user():
@@ -507,25 +433,42 @@ def verify_user():
 def last_login():
     log_file = "log_access.csv"
     if not os.path.exists(log_file):
-        return "Kayıt yok", 200
+        return jsonify({"message": "Kayıt yok"}), 200
     try:
         df = pd.read_csv(log_file)
         if df.empty:
-            return "Kayıt yok", 200
-        last_name = df.iloc[-1]["Name"]
-        return str(last_name), 200
-    except Exception as e:
-        return "Hata: " + str(e), 500
+            return jsonify({"message": "Kayıt yok"}), 200
 
+        last_name = df.iloc[-1]["Name"]
+        tts_text = f"Son giriş yapan kişi: {last_name}"
+
+        # Sesli yanıt üret
+        file_id = str(uuid.uuid4())
+        mp3_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.mp3")
+        wav_path = os.path.join(UPLOAD_FOLDER, f"{file_id}_reply.wav")
+        try:
+            gTTS(tts_text, lang="tr").save(mp3_path)
+            audio = AudioSegment.from_mp3(mp3_path)
+            audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(audio.raw_data)
+            host = request.host_url.rstrip('/')
+            url = f"{host}/audios/{os.path.basename(wav_path)}"
+
+            return jsonify({
+                "name": last_name,
+                "url": url
+            }), 200
+        except Exception as e:
+            print(f"Ses sentezleme hatası: {str(e)}")
+            return jsonify({"name": last_name}), 200
+    except Exception as e:
+        return jsonify({"message": f"Hata: {str(e)}"}), 500
+
+    
 if __name__ == "__main__":
-    # CSV dosyalarını başlangıçta oluştur
-    if not os.path.exists(LOG_FILE):
-        df = pd.DataFrame(columns=['ID', 'Name', 'Timestamp', 'Action'])
-        df.to_csv(LOG_FILE, index=False)
-    
-    if not os.path.exists(NAMES_FILE):
-        df = pd.DataFrame(columns=['ID', 'Name'])
-        df.to_csv(NAMES_FILE, index=False)
-    
     print(f"Server starting on http://{SERVER_IP}:{SERVER_PORT}")
     app.run(host="0.0.0.0", port=SERVER_PORT, debug=True)

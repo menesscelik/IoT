@@ -383,37 +383,39 @@ void loop() {
           http.end();
           break;
         } else if (command.indexOf("en son kim girmiş") != -1) {
-          // Sunucudan en son giriş yapanı al
-          WiFiClient client;
-          HTTPClient http;
-          http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/last_login");
-          int httpCode = http.GET();
-          if (httpCode == HTTP_CODE_OK) {
-            String response = http.getString();
-            Serial.println("Son giriş yapan: " + response);
-            // Welcome gibi hoparlörden de oku
-            String ttsText = "Son giriş yapan: " + response;
-            WiFiClient ttsClient;
-            HTTPClient ttsHttp;
-            ttsHttp.begin(ttsClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/upload");
-            ttsHttp.addHeader("Content-Type", "application/json");
-            String ttsJson = String("{\"text\":\"") + ttsText + "\"}";
-            int ttsCode = ttsHttp.POST(ttsJson);
-            if (ttsCode == HTTP_CODE_OK) {
-              String ttsUrl = ttsHttp.getString();
-              if (ttsUrl.startsWith("http")) {
-                play_wav_from_url(ttsUrl);
-              }
-            }
-            ttsHttp.end();
-          } else {
-            Serial.println("Sunucudan bilgi alınamadı.");
-          }
-          http.end();
-          break;
+  // Sunucudan en son giriş yapanı al
+        WiFiClient client;
+        HTTPClient http;
+        http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/last_login");
+        int httpCode = http.GET();
+        if (httpCode == HTTP_CODE_OK) {
+          String response = http.getString();
+    
+          DynamicJsonDocument doc(256);
+          DeserializationError err = deserializeJson(doc, response);
+
+        if (!err && doc.containsKey("name")) {
+          String name = doc["name"].as<String>();
+          String url = doc["url"].as<String>();
+
+          // Konsola sade çıktı
+          Serial.println("Son giriş yapan kişi: " + name);
+
+          // Sesli olarak oynat
+            if (url.startsWith("http")) {
+            play_wav_from_url(url);
+      }
         } else {
-          Serial.println("Komut anlaşılamadı. Lütfen tekrar deneyin.");
-        }
+          Serial.println("Sunucudan geçerli veri alınamadı.");
+          Serial.println("Yanıt içeriği: " + response);
+    }
+        } else {
+    Serial.println("Sunucudan bilgi alınamadı. HTTP kodu: " + String(httpCode));
+  }
+  http.end();
+  break;
+}
+
       }
       break;
     default:
@@ -465,38 +467,33 @@ bool check_server_connection() {
 void handleVoiceAssistant() {
   // Önce wake word kontrolü yap
   if (!checkWakeWord()) {
-    Serial.println("❌ Wake word algılanmadı, asistan başlatılmıyor.");
+    Serial.println("Wake word algılanamadı, sistem başlatılamıyor.");
     return;
   }
   
-  Serial.println("✨ Wake word doğrulandı, asistan başlatılıyor...");
-  delay(500); // Kısa bir bekleme
+  Serial.println("Wake word doğrulandı, sistem başlatılıyor...");
+  delay(500);
   
-  // Sunucu bağlantısını kontrol et
   if (!check_server_connection()) {
-    Serial.println("❌ Sunucu bağlantısı kurulamadı! Kayıt iptal ediliyor.");
+    Serial.println("Sunucu bağlantısı kurulamadı! İşlem iptal ediliyor.");
     return;
   }
   
-  // Önce mevcut I2S sürücüsünü temizle
   i2s_driver_uninstall(I2S_NUM_0);
   delay(100);
   
   i2s_record_init();
-  Serial.println("🎙️ Ses kaydı başlıyor...");
+  Serial.println("Ses algılama başlatıldı...");
   
-  // Oturum ID'si oluştur
   String session_id = String(random(0xFFFFFFFF), HEX);
   
-  // WiFi bağlantısını kontrol et
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("❌ WiFi bağlantısı kopmuş! Yeniden bağlanılıyor...");
+    Serial.println("WiFi bağlantısı kesildi! Yeniden bağlanılıyor...");
     wifi_connect();
   }
   
-  // WiFi client'ı hazırla
   WiFiClient client;
-  client.setTimeout(120000);  // 120 saniye timeout
+  client.setTimeout(120000);
   
   HTTPClient http;
   http.begin(client, UPLOAD_URL);
@@ -504,22 +501,19 @@ void handleVoiceAssistant() {
   http.addHeader("X-Session-ID", session_id);
   http.setTimeout(120000);
   
-  // İlk chunk için WAV header oluştur
-  size_t total_data_size = SAMPLE_RATE * RECORD_TIME_SEC * 2;  // PCM veri boyutu
+  size_t total_data_size = SAMPLE_RATE * RECORD_TIME_SEC * 2;
   create_wav_header(chunk_buffer, total_data_size, SAMPLE_RATE);
   
-  // Kayıt ve gönderme döngüsü
   size_t total_bytes = 0;
   unsigned long start_time = millis();
   bool first_chunk = true;
   String url = "";
   int chunk_count = 0;
-  int http_errors = 0;  // HTTP hata sayacı
+  int http_errors = 0;
   
   while ((millis() - start_time) < RECORD_TIME_SEC * 1000) {
     size_t bytes_read = 0;
     
-    // I2S'den veri oku
     esp_err_t result = i2s_read(I2S_NUM_0, 
                                first_chunk ? chunk_buffer + WAV_HEADER_SIZE : chunk_buffer, 
                                CHUNK_SIZE, 
@@ -527,14 +521,11 @@ void handleVoiceAssistant() {
                                portMAX_DELAY);
     
     if (result == ESP_OK && bytes_read > 0) {
-      // HTTP başlıklarını ayarla
       http.addHeader("X-First-Chunk", first_chunk ? "true" : "false");
       http.addHeader("X-Last-Chunk", (millis() - start_time) >= (RECORD_TIME_SEC * 1000 - 100) ? "true" : "false");
       
-      // Chunk'ı gönder
       int httpCode;
       if (first_chunk) {
-        // İlk chunk WAV header ile birlikte gönderilir
         httpCode = http.POST(chunk_buffer, bytes_read + WAV_HEADER_SIZE);
         first_chunk = false;
       } else {
@@ -543,40 +534,32 @@ void handleVoiceAssistant() {
       
       if (httpCode == HTTP_CODE_OK) {
         String response = http.getString();
-        if (response.length() > 10) {  // URL gelmiş olabilir
-          url = response;  // Son URL'i sakla
-          Serial.println("✅ Sunucudan URL alındı: " + url);
-        } else if (response.length() > 0) {
-          Serial.println("ℹ️ Sunucu yanıtı: " + response);
+        if (response.length() > 10) {
+          url = response;
+          Serial.println("Sunucu yanıtı alındı: " + url);
         }
         chunk_count++;
         total_bytes += bytes_read;
         
-        // Her saniye durum mesajı
-        if ((millis() - start_time) % 1000 < 100) {
-          Serial.printf("⏺️ Kayıt sürüyor: %d saniye, %u bytes gönderildi (%d chunk)\n", 
+        if ((millis() - start_time) % 2000 < 100) {
+          Serial.printf("Ses algılama devam ediyor: %d saniye, %u byte\n", 
                        (millis() - start_time) / 1000,
-                       total_bytes,
-                       chunk_count);
+                       total_bytes);
         }
       } else {
         http_errors++;
-        Serial.printf("❌ HTTP hatası (chunk %d): %d - %s\n", 
+        Serial.printf("Bağlantı hatası (parça %d): %d\n", 
                      chunk_count, 
-                     httpCode,
-                     http.errorToString(httpCode).c_str());
+                     httpCode);
         
-        // Çok fazla hata varsa işlemi sonlandır
         if (http_errors > 5) {
-          Serial.println("❌ Çok fazla HTTP hatası, işlem iptal ediliyor!");
+          Serial.println("Çok fazla hata oluştu, işlem durduruluyor!");
           break;
         }
         
-        // WiFi bağlantısını kontrol et ve gerekirse yeniden bağlan
         if (WiFi.status() != WL_CONNECTED) {
-          Serial.println("❌ WiFi bağlantısı kopmuş! Yeniden bağlanılıyor...");
+          Serial.println("WiFi bağlantısı kesildi! Yeniden bağlanılıyor...");
           wifi_connect();
-          // HTTP client'ı yeniden başlat
           http.end();
           http.begin(client, UPLOAD_URL);
           http.addHeader("Content-Type", "audio/wav");
@@ -587,40 +570,35 @@ void handleVoiceAssistant() {
     }
   }
   
-  // I2S'i durdur ve temizle
   i2s_stop(I2S_NUM_0);
   i2s_driver_uninstall(I2S_NUM_0);
   
-  Serial.printf("✅ Kayıt tamamlandı. Toplam %u bytes gönderildi (%d chunk)\n", 
+  Serial.printf("Ses algılama tamamlandı. Toplam %u byte (%d parça)\n", 
                 total_bytes + WAV_HEADER_SIZE,
                 chunk_count);
   
   if (http_errors > 0) {
-    Serial.printf("⚠️ Toplam %d HTTP hatası oluştu\n", http_errors);
+    Serial.printf("Toplam %d bağlantı hatası oluştu\n", http_errors);
   }
   
   http.end();
   
-  // Yanıt URL'i gelirse sesi çal
   if (url.length() > 0) {
-    Serial.println("🔊 Yanıt çalınıyor: " + url);
+    Serial.println("Ses yanıtı çalınıyor: " + url);
     play_wav_from_url(url);
   } else {
-    Serial.println("❌ URL alınamadı - Sunucu yanıt vermemiş olabilir");
+    Serial.println("Sunucu yanıt vermedi");
   }
 }
 
-// Wake word kontrolü için ses kaydı ve sunucuya gönderme
 bool checkWakeWord() {
-  Serial.println("\n🎤 Wake word bekleniyor...");
+  Serial.println("\nSes algılama bekleniyor...");
   
-  // Sunucu bağlantısını kontrol et
   if (!check_server_connection()) {
-    Serial.println("❌ Sunucu bağlantısı kurulamadı!");
+    Serial.println("Sunucu bağlantısı kurulamadı!");
     return false;
   }
   
-  // I2S'i kayıt için hazırla
   i2s_driver_uninstall(I2S_NUM_0);
   delay(100);
   i2s_record_init();
@@ -629,12 +607,10 @@ bool checkWakeWord() {
   int attempt = 1;
   
   while (!wake_word_detected) {
-    Serial.printf("\n🔄 Dinleme denemesi #%d\n", attempt++);
+    Serial.printf("\nDinleme denemesi #%d\n", attempt++);
     
-    // Oturum ID'si oluştur
     String session_id = String(random(0xFFFFFFFF), HEX);
     
-    // WiFi client'ı hazırla
     WiFiClient client;
     client.setTimeout(120000);
     
@@ -642,21 +618,19 @@ bool checkWakeWord() {
     http.begin(client, UPLOAD_URL);
     http.addHeader("Content-Type", "audio/wav");
     http.addHeader("X-Session-ID", session_id);
-    http.addHeader("X-Wake-Check", "true");  // Wake word kontrolü için özel header
+    http.addHeader("X-Wake-Check", "true");
     http.setTimeout(120000);
     
-    // WAV header oluştur
     size_t total_data_size = SAMPLE_RATE * WAKEWORD_TIME_SEC * 2;
     create_wav_header(chunk_buffer, total_data_size, SAMPLE_RATE);
     
-    // Kayıt ve gönderme döngüsü
     size_t total_bytes = 0;
     unsigned long start_time = millis();
     bool first_chunk = true;
     String transcription = "";
     int chunk_count = 0;
     
-    Serial.println("🎙️ Dinleniyor...");
+    Serial.println("Ses algılanıyor...");
     
     while ((millis() - start_time) < WAKEWORD_TIME_SEC * 1000) {
       size_t bytes_read = 0;
@@ -682,211 +656,50 @@ bool checkWakeWord() {
         if (httpCode == HTTP_CODE_OK) {
           String response = http.getString();
           if (response.length() > 0 && !response.startsWith("http")) {
-            transcription = response;  // Sunucudan gelen metni sakla
+            transcription = response;
           }
           chunk_count++;
           total_bytes += bytes_read;
         } else {
-          Serial.printf("❌ HTTP hatası: %d\n", httpCode);
+          Serial.printf("Bağlantı hatası: %d\n", httpCode);
         }
       }
     }
     
-    // I2S'i durdur ve yeniden başlat
     i2s_stop(I2S_NUM_0);
     i2s_start(I2S_NUM_0);
     
     http.end();
     
-    Serial.printf("✅ Kayıt tamamlandı. Toplam %u bytes gönderildi (%d chunk)\n", 
+    Serial.printf("Ses algılama tamamlandı. Toplam %u byte (%d parça)\n", 
                   total_bytes + WAV_HEADER_SIZE,
                   chunk_count);
     
-    // Transcription'ı küçük harfe çevir ve boşlukları temizle
     transcription.toLowerCase();
     transcription.trim();
     
-    Serial.printf("🗣️ Algılanan metin: '%s'\n", transcription.c_str());
-    Serial.printf("🎯 Beklenen wake word: '%s'\n", WAKEWORD_PHRASE);
+    Serial.printf("Algılanan ses: '%s'\n", transcription.c_str());
+    Serial.printf("Beklenen komut: '%s'\n", WAKEWORD_PHRASE);
     
-    // Wake word kontrolü
     if (transcription.indexOf(WAKEWORD_PHRASE) != -1) {
-      Serial.println("✅ Wake word tespit edildi!");
+      Serial.println("Komut algılandı!");
       wake_word_detected = true;
     } else {
-      Serial.println("❌ Wake word tespit edilemedi, tekrar dinleniyor...");
-      delay(100); // Kısa bir bekleme
+      Serial.println("Komut algılanamadı, tekrar deneniyor...");
+      delay(100);
     }
   }
   
-  // I2S'i temizle
   i2s_driver_uninstall(I2S_NUM_0);
   return true;
 }
 
-void handleKeypadAccess() {
-  Serial.println("\n=== Şifreli Giriş Sistemi ===");
-  Serial.println("4 haneli şifreyi girin:");
-  String input = "";
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      if (key == '#') {
-        if (input.length() == 4) {
-          if (input == correctPassword) {
-            Serial.println("\n✅ Şifre doğru! Kapı açılıyor...");
-            doorServo.write(SERVO_OPEN);
-            delay(2000); // Kapı açık kalma süresi
-            doorServo.write(SERVO_CLOSED);
-            Serial.println("Kapı kapandı.");
-          } else {
-            Serial.println("\n❌ Şifre yanlış!");
-          }
-          input = "";
-          Serial.println("Yeniden şifre girin:");
-        } else {
-          Serial.println("\nLütfen 4 haneli şifre girin!");
-          input = "";
-        }
-      } else if (key == '*') {
-        input = "";
-        Serial.println("Giriş sıfırlandı. Tekrar girin:");
-      } else if (input.length() < 4 && key >= '0' && key <= '9') {
-        input += key;
-        Serial.print("*");
-      }
-    }
-    delay(50);
-  }
-}
-
-// Kullanıcı kayıt fonksiyonu
-void handleRegisterUser() {
-  Serial.println("\n=== Yeni Kullanıcı Oluştur ===");
-  String name = "";
-  String password = "";
-  Serial.println("Kullanıcı adı girin (en az 1 karakter, bitirmek için #):");
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      if (key == '#') break;
-      if (key != '*' && name.length() < 16) {
-        name += key;
-        Serial.print(key);
-      }
-    }
-    delay(50);
-  }
-  Serial.println();
-  Serial.println("4 haneli şifre girin (bitirmek için #):");
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      if (key == '#') break;
-      if (key >= '0' && key <= '9' && password.length() < 4) {
-        password += key;
-        Serial.print("*");
-      }
-    }
-    delay(50);
-  }
-  Serial.println();
-  if (name.length() == 0 || password.length() != 4) {
-    Serial.println("Hatalı giriş! Kullanıcı adı ve 4 haneli şifre zorunlu.");
-    return;
-  }
-  // Sunucuya gönder
-  WiFiClient client;
-  HTTPClient http;
-  http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/register_user");
-  http.addHeader("Content-Type", "application/json");
-  String json = String("{\"name\":\"") + name + "\",\"password\":\"" + password + "\"}";
-  int httpCode = http.POST(json);
-  if (httpCode == HTTP_CODE_OK) {
-    String response = http.getString();
-    Serial.println("\nKayıt başarılı: " + response);
-  } else {
-    Serial.println("\nKayıt başarısız! HTTP kodu: " + String(httpCode));
-  }
-  http.end();
-}
-
-// Kullanıcı giriş fonksiyonu
-void handleUserLogin() {
-  Serial.println("\n=== Giriş Yap ===");
-  String password = "";
-  Serial.println("4 haneli şifrenizi girin (bitirmek için #):");
-  while (true) {
-    char key = keypad.getKey();
-    if (key) {
-      if (key == '#') break;
-      if (key >= '0' && key <= '9' && password.length() < 4) {
-        password += key;
-        Serial.print("*");
-      }
-    }
-    delay(50);
-  }
-  Serial.println();
-  if (password.length() != 4) {
-    Serial.println("Hatalı giriş! 4 haneli şifre zorunlu.");
-    return;
-  }
-  // Sunucuya gönder
-  WiFiClient client;
-  HTTPClient http;
-  http.begin(client, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/verify_user");
-  http.addHeader("Content-Type", "application/json");
-  String json = String("{\"password\":\"") + password + "\"}";
-  int httpCode = http.POST(json);
-  if (httpCode == HTTP_CODE_OK) {
-    String response = http.getString();
-    DynamicJsonDocument doc(256);
-    DeserializationError error = deserializeJson(doc, response);
-    if (!error && doc["status"] == "success") {
-      Serial.println("\nGiriş başarılı! Kapı açılıyor...");
-      doorServo.write(180); // 180 derece döndür
-      delay(2000);
-      doorServo.write(SERVO_CLOSED);
-      Serial.println("Kapı kapandı.");
-      // Welcome mesajı
-      String name = doc["name"].as<String>();
-      String welcomeText = "Welcome " + name;
-      // Sunucuya metni gönderip ses dosyası al
-      WiFiClient ttsClient;
-      HTTPClient ttsHttp;
-      ttsHttp.begin(ttsClient, String("http://") + SERVER_IP + ":" + SERVER_PORT + "/upload");
-      ttsHttp.addHeader("Content-Type", "application/json");
-      String ttsJson = String("{\"text\":\"") + welcomeText + "\"}";
-      int ttsCode = ttsHttp.POST(ttsJson);
-      if (ttsCode == HTTP_CODE_OK) {
-        String ttsUrl = ttsHttp.getString();
-        if (ttsUrl.startsWith("http")) {
-          play_wav_from_url(ttsUrl);
-        }
-      }
-      ttsHttp.end();
-    } else {
-      Serial.println("\nGiriş başarısız! Şifre yanlış veya kullanıcı yok.");
-    }
-  } else {
-    Serial.println("\nGiriş başarısız! HTTP kodu: " + String(httpCode));
-  }
-  http.end();
-}
-
-// getNameByVoice fonksiyonu ekle
 String getNameByVoice() {
   Serial.println("Ses kaydı başlatılıyor...");
-  // handleVoiceAssistant fonksiyonundaki gibi ses kaydını başlatıp sunucuya gönder
-  // ve dönen metni isim olarak al
-  // (Kısa süreli kayıt ve wake word kontrolü olmadan, direkt metin alınacak şekilde)
-  // Burada örnek olarak handleVoiceAssistant fonksiyonunun bir kısmı tekrar kullanılabilir
-  // Kısa kayıt süresi (ör: 3 saniye)
   i2s_driver_uninstall(I2S_NUM_0);
   delay(100);
   i2s_record_init();
-  Serial.println("🎙️ İsim için ses kaydı başlıyor...");
+  Serial.println("İsim için ses algılanıyor...");
   String session_id = String(random(0xFFFFFFFF), HEX);
   WiFiClient client;
   client.setTimeout(120000);
@@ -894,9 +707,9 @@ String getNameByVoice() {
   http.begin(client, UPLOAD_URL);
   http.addHeader("Content-Type", "audio/wav");
   http.addHeader("X-Session-ID", session_id);
-  http.addHeader("X-Wake-Check", "true"); // Sadece metin dönecek
+  http.addHeader("X-Wake-Check", "true");
   http.setTimeout(120000);
-  size_t total_data_size = SAMPLE_RATE * 3 * 2; // 3 saniye kayıt
+  size_t total_data_size = SAMPLE_RATE * 3 * 2;
   create_wav_header(chunk_buffer, total_data_size, SAMPLE_RATE);
   size_t total_bytes = 0;
   unsigned long start_time = millis();
@@ -929,18 +742,16 @@ String getNameByVoice() {
   i2s_stop(I2S_NUM_0);
   i2s_driver_uninstall(I2S_NUM_0);
   transcription.trim();
-  Serial.print("🗣️ Algılanan isim: "); Serial.println(transcription);
+  Serial.print("Algılanan isim: "); Serial.println(transcription);
   return transcription;
 }
 
-// getCommandByVoice fonksiyonu ekle
 String getCommandByVoice() {
   Serial.println("Komut için ses kaydı başlatılıyor...");
-  // 3 saniyelik kısa kayıt ile komut alınacak
   i2s_driver_uninstall(I2S_NUM_0);
   delay(100);
   i2s_record_init();
-  Serial.println("🎙️ Komut için ses kaydı başlıyor...");
+  Serial.println("Komut için ses algılanıyor...");
   String session_id = String(random(0xFFFFFFFF), HEX);
   WiFiClient client;
   client.setTimeout(120000);
@@ -948,9 +759,9 @@ String getCommandByVoice() {
   http.begin(client, UPLOAD_URL);
   http.addHeader("Content-Type", "audio/wav");
   http.addHeader("X-Session-ID", session_id);
-  http.addHeader("X-Wake-Check", "true"); // Sadece metin dönecek
+  http.addHeader("X-Wake-Check", "true");
   http.setTimeout(120000);
-  size_t total_data_size = SAMPLE_RATE * 3 * 2; // 3 saniye kayıt
+  size_t total_data_size = SAMPLE_RATE * 3 * 2;
   create_wav_header(chunk_buffer, total_data_size, SAMPLE_RATE);
   size_t total_bytes = 0;
   unsigned long start_time = millis();
@@ -983,6 +794,6 @@ String getCommandByVoice() {
   i2s_stop(I2S_NUM_0);
   i2s_driver_uninstall(I2S_NUM_0);
   transcription.trim();
-  Serial.print("🗣️ Algılanan komut: "); Serial.println(transcription);
+  Serial.print("Algılanan komut: "); Serial.println(transcription);
   return transcription;
 }
